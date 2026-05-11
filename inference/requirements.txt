@@ -1,0 +1,13 @@
+torch
+torchvision
+torchaudio
+diffusers
+transformers
+accelerate
+safetensors
+controlnet_aux
+opencv-python
+insightface
+fastapi
+uvicorn
+pillow

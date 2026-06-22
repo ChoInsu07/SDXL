@@ -9,20 +9,36 @@ app = FastAPI(title="KV-AI Key Visual Generator")
 @app.post("/generate")
 async def generate(
     prompt: str = Form(...),
-    image: UploadFile = File(...),
+    product_image: UploadFile = File(...),
+    composition_image: UploadFile = File(None),
     negative_prompt: str = Form("low quality, blurry, distorted"),
-    controlnet_scale: float = Form(0.8),
+    controlnet_scale: float = Form(0.5),
+    ip_adapter_scale: float = Form(0.6),
     num_inference_steps: int = Form(30),
+    use_pattern: bool = Form(False),
+    pattern_threshold_ratio: float = Form(0.15),
+    pattern_spacing: int = Form(50),
 ):
-    image_bytes = await image.read()
-    init_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    product_bytes = await product_image.read()
+    product_img = Image.open(io.BytesIO(product_bytes)).convert("RGB")
+
+    if composition_image:
+        comp_bytes = await composition_image.read()
+        comp_img = Image.open(io.BytesIO(comp_bytes)).convert("RGB")
+    else:
+        comp_img = product_img
 
     result = generate_kv_image(
         prompt=prompt,
-        init_image=init_image,
+        product_image=product_img,
+        composition_image=comp_img,
         negative_prompt=negative_prompt,
         num_inference_steps=num_inference_steps,
         controlnet_scale=controlnet_scale,
+        ip_adapter_scale=ip_adapter_scale,
+        use_pattern=use_pattern,
+        pattern_threshold_ratio=pattern_threshold_ratio,
+        pattern_spacing=pattern_spacing,
     )
 
     buf = io.BytesIO()

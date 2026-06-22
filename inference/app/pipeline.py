@@ -9,6 +9,7 @@ from diffusers import (
     DDIMScheduler,
 )
 import cv2
+from app.element_extractor import extract_element, tile_pattern
 
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -22,12 +23,10 @@ SDXL_REFINER_PATH = os.path.join(MODELS_DIR, "sdxl", "sd_xl_refiner")
 CONTROLNET_PATH = os.path.join(MODELS_DIR, "controlnet", "canny")
 IP_ADAPTER_PATH = os.path.join(MODELS_DIR, "ip_adapter")
 
-# ── ControlNet ──
 controlnet = ControlNetModel.from_pretrained(
     CONTROLNET_PATH, torch_dtype=dtype
 ).to(device)
 
-# ── SDXL Base + ControlNet ──
 pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
     SDXL_BASE_PATH,
     controlnet=controlnet,
@@ -35,23 +34,24 @@ pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
 ).to(device)
 pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
 
-# ── Refiner ──
 refiner = StableDiffusionXLPipeline.from_pretrained(
     SDXL_REFINER_PATH, torch_dtype=dtype
 ).to(device)
 
-# ── IP-Adapter (선택) ──
+# IP-Adapter (product_image 전용)
 ip_adapter_weight = os.path.join(IP_ADAPTER_PATH, "sdxl_models", "ip-adapter_sdxl.safetensors")
 if os.path.exists(ip_adapter_weight):
     pipe.load_ip_adapter(ip_adapter_weight, subfolder="")
     pipe.set_ip_adapter_scale(0.6)
 
-# ── LoRA (선택) ──
+# LoRA (category style)
 lora_dir = os.path.join(MODELS_DIR, "lora")
+lora_loaded = False
 if os.path.isdir(lora_dir):
     lora_files = [f for f in os.listdir(lora_dir) if f.endswith((".safetensors", ".bin"))]
     if lora_files:
         pipe.load_lora_weights(os.path.join(lora_dir, lora_files[0]))
+        lora_loaded = True
 
 
 def to_canny(image: Image.Image, low=100, high=200) -> Image.Image:
@@ -63,12 +63,24 @@ def to_canny(image: Image.Image, low=100, high=200) -> Image.Image:
 @torch.inference_mode()
 def generate_kv_image(
     prompt: str,
-    init_image: Image.Image,
+    product_image: Image.Image,        # → IP-Adapter (제품 정체성 유지)
+    composition_image: Image.Image,     # → ControlNet (구도 참고)
     negative_prompt: str = "low quality, blurry, distorted",
     num_inference_steps: int = 30,
-    controlnet_scale: float = 0.8,
+    controlnet_scale: float = 0.5,
+    ip_adapter_scale: float = 0.6,
+    use_pattern: bool = False,
+    pattern_threshold_ratio: float = 0.15,
+    pattern_spacing: int = 50,
 ):
-    control_image = to_canny(init_image)
+    pipe.set_ip_adapter_scale(ip_adapter_scale)
+
+    if use_pattern:
+        element = extract_element(composition_image, area_threshold_ratio=pattern_threshold_ratio)
+        pattern = tile_pattern(element, spacing=pattern_spacing)
+        control_image = to_canny(pattern)
+    else:
+        control_image = to_canny(composition_image)
     gen = torch.Generator(device=device).manual_seed(42)
 
     latent = pipe(
@@ -76,6 +88,7 @@ def generate_kv_image(
         negative_prompt=negative_prompt,
         image=control_image,
         controlnet_conditioning_scale=controlnet_scale,
+        ip_adapter_image=product_image,
         num_inference_steps=num_inference_steps,
         generator=gen,
         output_type="latent",
